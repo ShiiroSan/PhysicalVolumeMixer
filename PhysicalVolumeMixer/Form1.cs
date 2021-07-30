@@ -31,9 +31,12 @@ namespace PhysicalVolumeMixer
         readonly int ActiveWindowCooldown = 350;
         long lastGetCurrentWindowCall = 0;
         AppAudio activeWindowAudio = new();
+
+        Serial serial = new();
+
+        List<ComboBox> comboBoxes = new();
         public Form1()
         {
-            Application.ApplicationExit += Application_ApplicationExit;
             InitializeComponent();
             activeWindowAudio.Process = Process.GetProcessById(0);
             deviceEnumerator = new MMDeviceEnumerator();
@@ -45,20 +48,71 @@ namespace PhysicalVolumeMixer
             {
                 sessions[i].RegisterEventClient(this);
                 Process process = Process.GetProcessById((int)sessions[i].GetProcessID);
-                audioSessions.Add(new AppAudio(process, sessions[i]));
+                audioSessions.Add(new AppAudio(process));
+                if (sessions[i].IsSystemSoundsSession)
+                {
+                    audioSessions[i].DisplayName = "System Sounds";
+                }
                 Debug.WriteLine(process.MainWindowTitle != "" ? process.MainWindowTitle : process.ProcessName + "    " + (int)sessions[i].GetProcessID);
             }
+            Task task = Task.Run(async () => await serial.GetArduinoThread());
 
+            Thread serialRead = new Thread(serial.read);
+            serialRead.IsBackground = true;
+            serialRead.Start();
             Thread foregroundThread = new Thread(GetActiveWindow);
             foregroundThread.IsBackground = true;
             foregroundThread.Start();
+            Thread updateAudio = new Thread(UpdateAudio);
+            updateAudio.IsBackground = true;
+            updateAudio.Start();
             lastGetCurrentWindowCall = TimeSinceEpoch();
+            BindingSource bindingSource = new();
+            bindingSource.DataSource = audioSessions;
+            comboBoxes.Add(comboBox1);
+            comboBoxes.Add(comboBox2);
+            comboBoxes.Add(comboBox3);
+            comboBoxes.Add(comboBox4);
+            comboBoxes.Add(comboBox5);
+
             UpdateComboBox();
         }
 
-        private void Application_ApplicationExit(object sender, EventArgs e)
+        string prevLine = "";
+        //line ref: {SliderVolume1}|{SliderVolume2}|{SliderVolume3}|{SliderVolume4}|{SliderVolume5}
+        private void UpdateAudio()
         {
-            
+            while (true)
+            {
+                if (serial.line != "" && serial.line != prevLine)
+                {
+                    var volumeSplit = serial.line.Split("|");
+                    Debug.WriteLine(serial.line);
+                    for (int i = 0; i < volumeSplit.Length; i++)
+                    {
+                        AppAudio selected;
+                        if (comboBoxes[i].InvokeRequired)
+                        {
+                            comboBoxes[i].Invoke(new MethodInvoker(delegate
+                            {
+                                selected = (AppAudio)comboBoxes[i].SelectedItem;
+                                if (selected is not null)
+                                {
+                                    AudioSessionControl selectedAudioSession = GetAudioSession(selected.Process.ProcessName);
+                                    if (selectedAudioSession is not null)
+                                    {
+                                        Debug.WriteLine($"Application volume: {selectedAudioSession.SimpleAudioVolume.Volume}");
+                                        Debug.WriteLine($"Desired volume: {(float)int.Parse(volumeSplit[i]) / 100}");
+                                        selectedAudioSession.SimpleAudioVolume.Volume = (float)int.Parse(volumeSplit[i]) / 100;
+                                    }
+                                }
+                            }));
+                        }
+                    }
+                    prevLine = serial.line;
+                }
+                Thread.Sleep(200);
+            }
         }
 
         private void AudioSessionManager_OnSessionCreated(object sender, IAudioSessionControl newSession)
@@ -70,7 +124,6 @@ namespace PhysicalVolumeMixer
         private void UpdateSessions()
         {
             Debug.WriteLine("Reloading AudioSession");
-            List<AppAudio> audioSessions2 = new();
             device.AudioSessionManager.RefreshSessions();
             sessions = device.AudioSessionManager.Sessions;
             audioSessions.Clear();
@@ -78,10 +131,13 @@ namespace PhysicalVolumeMixer
             {
                 sessions[i].RegisterEventClient(this);
                 Process process = Process.GetProcessById((int)sessions[i].GetProcessID);
-                audioSessions.Add(new AppAudio(process, sessions[i]));
+                audioSessions.Add(new AppAudio(process/*, sessions[i]*/));
+                if (sessions[i].IsSystemSoundsSession)
+                {
+                    audioSessions[i].DisplayName = "System Sounds";
+                }
+                Debug.WriteLine(process.MainWindowTitle != "" ? process.MainWindowTitle : process.ProcessName + "    " + (int)sessions[i].GetProcessID);
             }
-            var ulist = audioSessions.Union(audioSessions2).ToList();
-            audioSessions = ulist;
             UpdateComboBox();
         }
 
@@ -93,20 +149,23 @@ namespace PhysicalVolumeMixer
             });
             audioSessions.Insert(0, activeWindowAudio);
             audioSessions[0].DisplayName = "Foreground window";
-            if (comboBox1.InvokeRequired)
+            foreach (ComboBox combo in comboBoxes)
             {
-                comboBox1.Invoke(new MethodInvoker(delegate
+                if (combo.InvokeRequired)
                 {
-                    comboBox1.Items.Clear();
-                    comboBox1.Items.AddRange(audioSessions.ToArray());
-                    comboBox1.DisplayMember = "DisplayName";
-                }));
-            }
-            else
-            {
-                comboBox1.Items.Clear();
-                comboBox1.Items.AddRange(audioSessions.ToArray());
-                comboBox1.DisplayMember = "DisplayName";
+                    combo.Invoke(new MethodInvoker(delegate
+                    {
+                        combo.Items.Clear();
+                        combo.Items.AddRange(audioSessions.ToArray());
+                        combo.DisplayMember = "DisplayName";
+                    }));
+                }
+                else
+                {
+                    combo.Items.Clear();
+                    combo.Items.AddRange(audioSessions.ToArray());
+                    combo.DisplayMember = "DisplayName";
+                }
             }
         }
 
@@ -123,12 +182,14 @@ namespace PhysicalVolumeMixer
                     int pID = Convert.ToInt32(activeWindowPtr);
                     if (pID != activeWindowAudio.Process.Id)
                     {
-                        activeWindowAudio.SessionControl = GetActiveWindowAudioSession(Process.GetProcessById(pID).ProcessName);
-                        if (activeWindowAudio.SessionControl is not null)
+                        AudioSessionControl activeWindowSession = GetAudioSession(Process.GetProcessById(pID).ProcessName);
+
+                        if (activeWindowSession is not null)
                         {
-                            Debug.WriteLine(activeWindowAudio.SessionControl.SimpleAudioVolume.Volume);
+                            Debug.WriteLine(activeWindowSession.SimpleAudioVolume.Volume);
                         }
                         activeWindowAudio.Process = Process.GetProcessById(pID);
+                        Debug.WriteLine($"Active process: {activeWindowAudio.Process.ProcessName}");
                     }
                 }
                 else
@@ -138,7 +199,7 @@ namespace PhysicalVolumeMixer
             }
         }
 
-        private AudioSessionControl GetActiveWindowAudioSession(string processname)
+        private AudioSessionControl GetAudioSession(string processname)
         {
             try
             {
@@ -197,6 +258,342 @@ namespace PhysicalVolumeMixer
         public void OnSessionDisconnected(AudioSessionDisconnectReason disconnectReason)
         {
             Debug.WriteLine(disconnectReason);
+        }
+
+        private void Form1_FormClosing(object sender, FormClosingEventArgs e)
+        {
+            if (e.CloseReason == CloseReason.UserClosing)
+            {
+                notifyIcon1.Visible = true;
+                Hide();
+                e.Cancel = true;
+            }
+        }
+
+        private void button_Click(object sender, EventArgs e)
+        {
+            switch ((sender as Button).Name)
+            {
+                case "button1":
+                    try
+                    {
+                        textBox1.Enabled = true;
+                        textBox1.Text = "";
+                        comboBox1.SelectedItem = null;
+                        comboBox1.Enabled = true;
+                    }
+                    catch (Exception)
+                    {
+
+                        throw;
+                    }
+                    break;
+
+                case "button2":
+                    try
+                    {
+                        textBox2.Enabled = true;
+                        textBox2.Text = "";
+                        comboBox2.SelectedItem = null;
+                        comboBox2.Enabled = true;
+                    }
+                    catch (Exception)
+                    {
+
+                        throw;
+                    }
+                    break;
+
+                case "button3":
+                    try
+                    {
+                        textBox3.Enabled = true;
+                        textBox3.Text = "";
+                        comboBox3.SelectedItem = null;
+                        comboBox3.Enabled = true;
+                    }
+                    catch (Exception)
+                    {
+
+                        throw;
+                    }
+                    break;
+
+                case "button4":
+                    try
+                    {
+                        textBox4.Enabled = true;
+                        textBox4.Text = "";
+                        comboBox4.SelectedItem = null;
+                        comboBox4.Enabled = true;
+                    }
+                    catch (Exception)
+                    {
+
+                        throw;
+                    }
+
+                    break;
+                case "button5":
+                    try
+                    {
+                        textBox5.Enabled = true;
+                        textBox5.Text = "";
+                        comboBox5.SelectedItem = null;
+                        comboBox5.Enabled = true;
+                    }
+                    catch (Exception)
+                    {
+
+                        throw;
+                    }
+                    break;
+                default:
+                    break;
+            }
+        }
+
+        private void textBox_TextChanged(object sender, EventArgs e)
+        {
+            switch ((sender as TextBox).Name)
+            {
+                case "textBox1":
+                    try
+                    {
+                        if (textBox1.Text != "")
+                        {
+                            comboBox1.SelectedItem = null;
+                            comboBox1.Enabled = false;
+                        }
+                        else
+                        {
+                            comboBox1.Enabled = true;
+                        }
+                    }
+                    catch (Exception)
+                    {
+
+                        throw;
+                    }
+                    break;
+
+                case "textBox2":
+                    try
+                    {
+                        if (textBox2.Text != "")
+                        {
+                            comboBox2.SelectedItem = null;
+                            comboBox2.Enabled = false;
+                        }
+                        else
+                        {
+                            comboBox2.Enabled = true;
+                        }
+                    }
+                    catch (Exception)
+                    {
+
+                        throw;
+                    }
+                    break;
+
+                case "textBox3":
+                    try
+                    {
+                        if (textBox3.Text != "")
+                        {
+                            comboBox3.SelectedItem = null;
+                            comboBox3.Enabled = false;
+                        }
+                        else
+                        {
+                            comboBox3.Enabled = true;
+                        }
+                    }
+                    catch (Exception)
+                    {
+
+                        throw;
+                    }
+                    break;
+
+                case "textBox4":
+                    try
+                    {
+                        if (textBox4.Text != "")
+                        {
+                            comboBox4.SelectedItem = null;
+                            comboBox4.Enabled = false;
+                        }
+                        else
+                        {
+                            comboBox4.Enabled = true;
+                        }
+                    }
+                    catch (Exception)
+                    {
+
+                        throw;
+                    }
+
+                    break;
+                case "textBox5":
+                    try
+                    {
+                        if (textBox5.Text != "")
+                        {
+                            comboBox5.SelectedItem = null;
+                            comboBox5.Enabled = false;
+                        }
+                        else
+                        {
+                            comboBox5.Enabled = true;
+                        }
+                    }
+                    catch (Exception)
+                    {
+
+                        throw;
+                    }
+                    break;
+                default:
+                    break;
+            }
+        }
+
+        private void comboBox_SelectedValueChanged(object sender, EventArgs e)
+        {
+            var selected = (AppAudio)(sender as ComboBox).SelectedItem;
+            if (selected is not null)
+            {
+                AudioSessionControl selectedAudioSession = GetAudioSession(selected.Process.ProcessName);
+                switch ((sender as ComboBox).Name)
+                {
+                    case "comboBox1":
+                        try
+                        {
+                            if (selectedAudioSession is not null)
+                            {
+                                if (!selectedAudioSession.IsSystemSoundsSession)
+                                {
+                                    pictureBox1.Image = Icon.ExtractAssociatedIcon(selected.Process.MainModule.FileName).ToBitmap();
+                                }
+                            }
+                            if (comboBox1.SelectedItem is "" || comboBox1.SelectedItem is null)
+                            {
+                                textBox1.Enabled = true;
+                            }
+                            else
+                            {
+                                textBox1.Enabled = false;
+                            }
+                        }
+                        catch (Exception)
+                        {
+
+                            throw;
+                        }
+                        break;
+
+                    case "comboBox2":
+                        try
+                        {
+                            if (selectedAudioSession is not null)
+                            {
+                                if (!selectedAudioSession.IsSystemSoundsSession)
+                                    pictureBox2.Image = Icon.ExtractAssociatedIcon(selected.Process.MainModule.FileName).ToBitmap();
+                            }
+                            if (comboBox2.SelectedItem is "" || comboBox2.SelectedItem is null)
+                            {
+                                textBox2.Enabled = true;
+                            }
+                            else
+                            {
+                                textBox2.Enabled = false;
+                            }
+                        }
+                        catch (Exception)
+                        {
+
+                            throw;
+                        }
+                        break;
+
+                    case "comboBox3":
+                        try
+                        {
+                            if (selectedAudioSession is not null)
+                            {
+                                if (!selectedAudioSession.IsSystemSoundsSession)
+                                    pictureBox3.Image = Icon.ExtractAssociatedIcon(selected.Process.MainModule.FileName).ToBitmap();
+                            }
+                            if (comboBox3.SelectedItem is "" || comboBox3.SelectedItem is null)
+                            {
+                                textBox3.Enabled = true;
+                            }
+                            else
+                            {
+                                textBox3.Enabled = false;
+                            }
+                        }
+                        catch (Exception)
+                        {
+
+                            throw;
+                        }
+                        break;
+
+                    case "comboBox4":
+                        try
+                        {
+                            if (selectedAudioSession is not null)
+                            {
+                                if (!selectedAudioSession.IsSystemSoundsSession)
+                                    pictureBox4.Image = Icon.ExtractAssociatedIcon(selected.Process.MainModule.FileName).ToBitmap();
+                            }
+                            if (comboBox4.SelectedItem is "" || comboBox4.SelectedItem is null)
+                            {
+                                textBox4.Enabled = true;
+                            }
+                            else
+                            {
+                                textBox4.Enabled = false;
+                            }
+                        }
+                        catch (Exception)
+                        {
+
+                            throw;
+                        }
+
+                        break;
+                    case "comboBox5":
+                        try
+                        {
+                            if (selectedAudioSession is not null)
+                            {
+                                if (!selectedAudioSession.IsSystemSoundsSession)
+                                    pictureBox5.Image = Icon.ExtractAssociatedIcon(selected.Process.MainModule.FileName).ToBitmap();
+                            }
+                            if (comboBox5.SelectedItem is "" || comboBox5.SelectedItem is null)
+                            {
+                                textBox5.Enabled = true;
+                            }
+                            else
+                            {
+                                textBox5.Enabled = false;
+                            }
+                        }
+                        catch (Exception)
+                        {
+
+                            throw;
+                        }
+                        break;
+                    default:
+                        break;
+                }
+            }
         }
     }
 }
