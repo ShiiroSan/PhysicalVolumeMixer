@@ -60,4 +60,25 @@
   <metadata name="notifyIcon1.TrayLocation" type="System.Drawing.Point, System.Drawing, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a">
     <value>17, 17</value>
   </metadata>
+  <metadata name="contextMenuStrip1.TrayLocation" type="System.Drawing.Point, System.Drawing, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a">
+    <value>130, 17</value>
+  </metadata>
+  <assembly alias="System.Drawing" name="System.Drawing, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a" />
+  <data name="notifyIcon1.Icon" type="System.Drawing.Icon, System.Drawing" mimetype="application/x-microsoft.net.object.bytearray.base64">
+    <value>
+        AAABAAEAICAQdwAAAADoAgAAFgAAACgAAAAgAAAAQAAAAAEABAAAAAAAgAIAAAAAAAAAAAAAAAAAAAAA
+        AAAAAAAAAACAAACAAAAAgIAAgAAAAIAAgACAgAAAgICAAMDAwAAAAP8AAP8AAAD//wD/AAAA/wD/AP//
+        AAD///8AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAiIiIiIiIiIiIiIAAAAAAAI////
+        ////////+AAAAAAACP////////////gAAAAAAAj////////////4AAAAAAAI////////////+AAAAAAA
+        CP////////////gAAAAAAAj////////////4AAAAAAAI////////////+AAAAAAACP////////////gA
+        AAAAAAj////////////4AAAAAAAI////////////+AAAAAAACP////////////gAAAAAAAj/////////
+        ///4AAAAAAAI////////////+AAAAAAACP////////////gAAAAAAAj////////////4AAAAAAAI////
+        ////////+AAAAAAACP////////////gAAAAAAAj////////////4AAAAAAAI////////////+AAAAAAA
+        CP////////////gAAAAAAAj////////////4AAAAAAAI/////////4iIiAAAAAAACP////////+P/4gA
+        AAAAAAj/////////j/iIAAAAAAAI/////////4+IgAAAAAAACP////////+IiAAAAAAAAAiIiIiIiIiI
+        iIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD///////////gAAD/4AAA/+AAAP/gA
+        AD/4AAA/+AAAP/gAAD/4AAA/+AAAP/gAAD/4AAA/+AAAP/gAAD/4AAA/+AAAP/gAAD/4AAA/+AAAP/gA
+        AD/4AAA/+AAAP/gAAD/4AAA/+AAAP/gAAD/4AAB/+AAA//gAAf///////////w==
+</value>
+  </data>
 </root>

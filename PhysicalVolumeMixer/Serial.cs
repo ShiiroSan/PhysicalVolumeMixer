@@ -1,70 +1,68 @@
-﻿using System;
-using System.Collections.Generic;
+﻿using System.Collections.Generic;
 using System.Linq;
-using System.Text;
 using System.Threading.Tasks;
 using System.Management;
 using System.IO.Ports;
 using System.Threading;
+using Microsoft.Toolkit.Uwp.Notifications;
 
 namespace PhysicalVolumeMixer
 {
     class Serial
     {
-        string arduinoLine = "";
-        string arduPort = "";
-        SerialPort serialPort = new();
-        public string line = "";
-        public Serial()
-        {
-        }
+        string _arduinoLine = "";
+        string _arduPort = "";
+        readonly SerialPort _serialPort = new();
+        public string Line = "";
 
         public async Task GetArduinoThread()
         {
             await Task.Run(() =>
             {
-                while (arduinoLine == "" && arduPort == "")
+                while (_arduinoLine == "" && _arduPort == "")
                 {
                     GetArduino();
                     Thread.Sleep(20);
                 }
-                serialPort.PortName = arduPort;
-                serialPort.Open();
+
+                _serialPort.PortName = _arduPort;
+                _serialPort.Open();
             });
+            new ToastContentBuilder()
+                .AddText("Arduino card connected!")
+                .AddText($"Port: {_serialPort.PortName}")
+                .SetToastDuration(ToastDuration.Short)
+                .Show();
         }
 
-        public void GetArduino()
+        private void GetArduino()
         {
             List<string> arduinoElement = new();
-            int arduinoItem = -1;
-            using (var searcher = new ManagementObjectSearcher("SELECT * FROM WIN32_SerialPort"))
-            {
-                string[] portnames = SerialPort.GetPortNames();
-                var ports = searcher.Get().Cast<ManagementBaseObject>().ToList();
-                var tList = (from n in portnames
-                             join p in ports on n equals p["DeviceID"].ToString()
-                             select n + " - " + p["Caption"]).ToList();
+            using var searcher = new ManagementObjectSearcher("SELECT * FROM WIN32_SerialPort");
+            string[] portnames = SerialPort.GetPortNames();
+            var ports = searcher.Get().Cast<ManagementBaseObject>().ToList();
+            var tList = (from n in portnames
+                join p in ports on n equals p["DeviceID"].ToString()
+                select n + " - " + p["Caption"]).ToList();
 
-                foreach (string s in tList)
+            foreach (string s in tList)
+            {
+                arduinoElement.Add(s);
+                if (s.Contains("Arduino"))
                 {
-                    arduinoElement.Add(s);
-                    if (s.Contains("Arduino"))
-                    {
-                        arduinoLine = s;
-                        arduinoItem = arduinoElement.IndexOf(s);
-                        arduPort = s.Substring(0, 5).Replace(" ", string.Empty);
-                    }
+                    _arduinoLine = s;
+                    _arduPort = s.Substring(0, 5).Replace(" ", string.Empty);
                 }
             }
         }
 
-        public void read()
+        public void Read()
         {
             while (true)
             {
-                if (serialPort.IsOpen)
+                if (_serialPort.IsOpen)
                 {
-                    line = serialPort.ReadLine();
+                    Line = _serialPort.ReadLine();
                 }
             }
         }

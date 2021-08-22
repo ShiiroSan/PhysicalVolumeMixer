@@ -1,116 +1,189 @@
-﻿using NAudio.CoreAudioApi;
-using NAudio.CoreAudioApi.Interfaces;
-using System;
+﻿using System;
 using System.Collections.Generic;
-using System.ComponentModel;
-using System.Data;
 using System.Diagnostics;
 using System.Drawing;
+using System.IO;
 using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
-using System.Windows.Forms;
+using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Threading;
+using System.Threading.Tasks;
+using System.Windows.Forms;
+using NAudio.CoreAudioApi;
+using NAudio.CoreAudioApi.Interfaces;
+using Tommy;
 
 namespace PhysicalVolumeMixer
 {
-
     public partial class Form1 : Form, IAudioSessionEventsHandler
     {
         [DllImport("user32.dll")]
         private static extern IntPtr GetForegroundWindow();
+
         [DllImport("user32.dll", SetLastError = true)]
         static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
 
-        List<AppAudio> audioSessions = new();
-        MMDeviceEnumerator deviceEnumerator;
-        MMDevice device;
-        SessionCollection sessions;
+        readonly List<AppAudio> _audioSessions = new();
+        MMDevice _device;
+        SessionCollection _sessions;
 
-        readonly int ActiveWindowCooldown = 350;
-        long lastGetCurrentWindowCall = 0;
-        AppAudio activeWindowAudio = new();
+        readonly int _activeWindowCooldown = 350;
+        long _lastGetCurrentWindowCall;
+        readonly AppAudio _activeWindowAudio = new();
 
-        Serial serial = new();
+        readonly Serial _serial = new();
 
-        List<ComboBox> comboBoxes = new();
+        readonly List<ComboBox> _comboBoxes = new();
+
         public Form1()
         {
             InitializeComponent();
-            activeWindowAudio.Process = Process.GetProcessById(0);
-            deviceEnumerator = new MMDeviceEnumerator();
-            device = deviceEnumerator.GetDefaultAudioEndpoint(DataFlow.Render, Role.Multimedia);
-            device.AudioSessionManager.OnSessionCreated += AudioSessionManager_OnSessionCreated;
 
-            sessions = device.AudioSessionManager.Sessions;
-            for (int i = 0; i < sessions.Count; i++)
+            _activeWindowAudio.Process = Process.GetProcessById(0);
+            var deviceEnumerator = new MMDeviceEnumerator();
+            _device = deviceEnumerator.GetDefaultAudioEndpoint(DataFlow.Render, Role.Multimedia);
+            _device.AudioSessionManager.OnSessionCreated += AudioSessionManager_OnSessionCreated;
+
+            _sessions = _device.AudioSessionManager.Sessions;
+            for (int i = 0; i < _sessions.Count; i++)
             {
-                sessions[i].RegisterEventClient(this);
-                Process process = Process.GetProcessById((int)sessions[i].GetProcessID);
-                audioSessions.Add(new AppAudio(process));
-                if (sessions[i].IsSystemSoundsSession)
+                _sessions[i].RegisterEventClient(this);
+                Process process = Process.GetProcessById((int) _sessions[i].GetProcessID);
+                _audioSessions.Add(new AppAudio(process));
+                if (_sessions[i].IsSystemSoundsSession)
                 {
-                    audioSessions[i].DisplayName = "System Sounds";
+                    _audioSessions[i].DisplayName = "System Sound";
                 }
-                Debug.WriteLine(process.MainWindowTitle != "" ? process.MainWindowTitle : process.ProcessName + "    " + (int)sessions[i].GetProcessID);
-            }
-            Task task = Task.Run(async () => await serial.GetArduinoThread());
 
-            Thread serialRead = new Thread(serial.read);
-            serialRead.IsBackground = true;
+                Debug.WriteLine(process.MainWindowTitle != ""
+                    ? process.MainWindowTitle
+                    : process.ProcessName + "    " + (int) _sessions[i].GetProcessID);
+            }
+
+            Task.Run(async () => await _serial.GetArduinoThread());
+
+            Thread serialRead = new(_serial.Read)
+            {
+                IsBackground = true
+            };
             serialRead.Start();
-            Thread foregroundThread = new Thread(GetActiveWindow);
-            foregroundThread.IsBackground = true;
+            Thread foregroundThread = new(GetActiveWindow)
+            {
+                IsBackground = true
+            };
             foregroundThread.Start();
-            Thread updateAudio = new Thread(UpdateAudio);
-            updateAudio.IsBackground = true;
+            Thread updateAudio = new(UpdateAudio)
+            {
+                IsBackground = true
+            };
             updateAudio.Start();
-            lastGetCurrentWindowCall = TimeSinceEpoch();
+            _lastGetCurrentWindowCall = TimeSinceEpoch();
             BindingSource bindingSource = new();
-            bindingSource.DataSource = audioSessions;
-            comboBoxes.Add(comboBox1);
-            comboBoxes.Add(comboBox2);
-            comboBoxes.Add(comboBox3);
-            comboBoxes.Add(comboBox4);
-            comboBoxes.Add(comboBox5);
+            bindingSource.DataSource = _audioSessions;
+            _comboBoxes.Add(comboBox1);
+            _comboBoxes.Add(comboBox2);
+            _comboBoxes.Add(comboBox3);
+            _comboBoxes.Add(comboBox4);
+            _comboBoxes.Add(comboBox5);
 
             UpdateComboBox();
+
+            List<TextBox> textBoxes = new();
+            textBoxes.Add(textBox1);
+            textBoxes.Add(textBox2);
+            textBoxes.Add(textBox3);
+            textBoxes.Add(textBox4);
+            textBoxes.Add(textBox5);
+
+
+            if (File.Exists("configuration.toml"))
+            {
+                using (StreamReader reader = File.OpenText("configuration.toml"))
+                {
+                    // Parse the table
+                    TomlTable table = TOML.Parse(reader);
+                    for (int i = 0; i < table["slidersExe"].AsArray.ChildrenCount; i++)
+                    {
+                        if (table["slidersExe"][i] == "System Sound")
+                        {
+                            _comboBoxes[i].SelectedItem = _audioSessions.Find(x => x.DisplayName == "System Sound");
+                        }
+                        else if (table["slidersExe"][i] == "Foreground")
+                        {
+                            _comboBoxes[i].SelectedItem = _audioSessions.Find(x => x.DisplayName == "Foreground window");
+                        }
+                        else
+                        {
+                            
+                            var tryToGetAudioSession = _audioSessions.Find(x =>
+                                x.DisplayName != "System Sound" && x.DisplayName != "Foreground window" && x.Process.MainModule.ModuleName == table["slidersExe"][i]);
+                            if (tryToGetAudioSession is not null)
+                            {
+                                _comboBoxes[i].SelectedItem = tryToGetAudioSession;
+                            }
+                            else
+                            {
+                                textBoxes[i].Text = table["slidersExe"][i];
+                            }
+                        }
+                    }
+                }
+            }
+            else
+            {
+                TomlTable toml = new TomlTable
+                {
+                    ["slidersExe"] = new TomlNode[] {"","","","",""}
+                };
+
+                using(StreamWriter writer = File.CreateText("configuration.toml"))
+                {
+                    toml.WriteTo(writer);
+                    // Remember to flush the data if needed!
+                    writer.Flush();
+                }
+            }
         }
 
-        string prevLine = "";
+        string _prevLine = "";
+
         //line ref: {SliderVolume1}|{SliderVolume2}|{SliderVolume3}|{SliderVolume4}|{SliderVolume5}
         private void UpdateAudio()
         {
             while (true)
             {
-                if (serial.line != "" && serial.line != prevLine)
+                if (_serial.Line != "" && _serial.Line != _prevLine)
                 {
-                    var volumeSplit = serial.line.Split("|");
-                    Debug.WriteLine(serial.line);
+                    var volumeSplit = _serial.Line.Split("|");
+                    Debug.WriteLine(_serial.Line);
                     for (int i = 0; i < volumeSplit.Length; i++)
                     {
                         AppAudio selected;
-                        if (comboBoxes[i].InvokeRequired)
+                        if (_comboBoxes[i].InvokeRequired)
                         {
-                            comboBoxes[i].Invoke(new MethodInvoker(delegate
+                            _comboBoxes[i].Invoke(new MethodInvoker(delegate
                             {
-                                selected = (AppAudio)comboBoxes[i].SelectedItem;
+                                selected = (AppAudio) _comboBoxes[i].SelectedItem;
                                 if (selected is not null)
                                 {
-                                    AudioSessionControl selectedAudioSession = GetAudioSession(selected.Process.ProcessName);
+                                    AudioSessionControl selectedAudioSession =
+                                        GetAudioSession(selected.Process.ProcessName);
                                     if (selectedAudioSession is not null)
                                     {
-                                        Debug.WriteLine($"Application volume: {selectedAudioSession.SimpleAudioVolume.Volume}");
-                                        Debug.WriteLine($"Desired volume: {(float)int.Parse(volumeSplit[i]) / 100}");
-                                        selectedAudioSession.SimpleAudioVolume.Volume = (float)int.Parse(volumeSplit[i]) / 100;
+                                        Debug.WriteLine(
+                                            $"Application volume: {selectedAudioSession.SimpleAudioVolume.Volume}");
+                                        Debug.WriteLine($"Desired volume: {(float) int.Parse(volumeSplit[i]) / 100}");
+                                        selectedAudioSession.SimpleAudioVolume.Volume =
+                                            (float) int.Parse(volumeSplit[i]) / 100;
                                     }
                                 }
                             }));
                         }
                     }
-                    prevLine = serial.line;
+
+                    _prevLine = _serial.Line;
                 }
+
                 Thread.Sleep(200);
             }
         }
@@ -124,46 +197,47 @@ namespace PhysicalVolumeMixer
         private void UpdateSessions()
         {
             Debug.WriteLine("Reloading AudioSession");
-            device.AudioSessionManager.RefreshSessions();
-            sessions = device.AudioSessionManager.Sessions;
-            audioSessions.Clear();
-            for (int i = 0; i < sessions.Count; i++)
+            _device.AudioSessionManager.RefreshSessions();
+            _sessions = _device.AudioSessionManager.Sessions;
+            _audioSessions.Clear();
+            for (int i = 0; i < _sessions.Count; i++)
             {
-                sessions[i].RegisterEventClient(this);
-                Process process = Process.GetProcessById((int)sessions[i].GetProcessID);
-                audioSessions.Add(new AppAudio(process/*, sessions[i]*/));
-                if (sessions[i].IsSystemSoundsSession)
+                _sessions[i].RegisterEventClient(this);
+                Process process = Process.GetProcessById((int) _sessions[i].GetProcessID);
+                _audioSessions.Add(new AppAudio(process /*, sessions[i]*/));
+                if (_sessions[i].IsSystemSoundsSession)
                 {
-                    audioSessions[i].DisplayName = "System Sounds";
+                    _audioSessions[i].DisplayName = "System Sound";
                 }
-                Debug.WriteLine(process.MainWindowTitle != "" ? process.MainWindowTitle : process.ProcessName + "    " + (int)sessions[i].GetProcessID);
+
+                Debug.WriteLine(process.MainWindowTitle != ""
+                    ? process.MainWindowTitle
+                    : process.ProcessName + "    " + (int) _sessions[i].GetProcessID);
             }
+
             UpdateComboBox();
         }
 
         private void UpdateComboBox()
         {
-            audioSessions.Sort((e1, e2) =>
-            {
-                return -e2.Name.CompareTo(e1.Name);
-            });
-            audioSessions.Insert(0, activeWindowAudio);
-            audioSessions[0].DisplayName = "Foreground window";
-            foreach (ComboBox combo in comboBoxes)
+            _audioSessions.Sort((e1, e2) => { return -e2.Name.CompareTo(e1.Name); });
+            _audioSessions.Insert(0, _activeWindowAudio);
+            _audioSessions[0].DisplayName = "Foreground window";
+            foreach (ComboBox combo in _comboBoxes)
             {
                 if (combo.InvokeRequired)
                 {
                     combo.Invoke(new MethodInvoker(delegate
                     {
                         combo.Items.Clear();
-                        combo.Items.AddRange(audioSessions.ToArray());
+                        combo.Items.AddRange(_audioSessions.ToArray());
                         combo.DisplayMember = "DisplayName";
                     }));
                 }
                 else
                 {
                     combo.Items.Clear();
-                    combo.Items.AddRange(audioSessions.ToArray());
+                    combo.Items.AddRange(_audioSessions.ToArray());
                     combo.DisplayMember = "DisplayName";
                 }
             }
@@ -173,28 +247,28 @@ namespace PhysicalVolumeMixer
         {
             while (true)
             {
-                if (lastGetCurrentWindowCall + ActiveWindowCooldown < TimeSinceEpoch())
+                if (_lastGetCurrentWindowCall + _activeWindowCooldown < TimeSinceEpoch())
                 {
-                    lastGetCurrentWindowCall = TimeSinceEpoch();
+                    _lastGetCurrentWindowCall = TimeSinceEpoch();
                     IntPtr hWnd = GetForegroundWindow(); // Get foreground window handle
                     uint activeWindowPtr;
                     GetWindowThreadProcessId(hWnd, out activeWindowPtr); // Get PID from window handle
-                    int pID = Convert.ToInt32(activeWindowPtr);
-                    if (pID != activeWindowAudio.Process.Id)
+                    int pId = Convert.ToInt32(activeWindowPtr);
+                    if (pId != _activeWindowAudio.Process.Id)
                     {
-                        AudioSessionControl activeWindowSession = GetAudioSession(Process.GetProcessById(pID).ProcessName);
+                        AudioSessionControl activeWindowSession =
+                            GetAudioSession(Process.GetProcessById(pId).ProcessName);
 
                         if (activeWindowSession is not null)
                         {
                             Debug.WriteLine(activeWindowSession.SimpleAudioVolume.Volume);
                         }
-                        activeWindowAudio.Process = Process.GetProcessById(pID);
-                        Debug.WriteLine($"Active process: {activeWindowAudio.Process.ProcessName}");
+
+                        _activeWindowAudio.Process = Process.GetProcessById(pId);
+                        Debug.WriteLine($"Active process: {_activeWindowAudio.Process.ProcessName}");
                     }
                 }
-                else
-                {
-                }
+
                 Thread.Sleep(10);
             }
         }
@@ -203,36 +277,36 @@ namespace PhysicalVolumeMixer
         {
             try
             {
-                var sessions = device.AudioSessionManager.Sessions;
+                var sessions = _device.AudioSessionManager.Sessions;
                 for (int i = 0; i < sessions.Count; i++)
                 {
-                    Process process = Process.GetProcessById((int)sessions[i].GetProcessID);
+                    Process process = Process.GetProcessById((int) sessions[i].GetProcessID);
                     if (process.ProcessName == processname)
                     {
-                        activeWindowAudio.Process = process;
+                        _activeWindowAudio.Process = process;
                         return sessions[i];
                     }
                 }
             }
             catch (Exception)
             {
+                // ignored
             }
+
             return null;
         }
 
         private long TimeSinceEpoch()
         {
-            return (long)(DateTime.UtcNow - new DateTime(1970, 1, 1)).TotalMilliseconds;
+            return (long) (DateTime.UtcNow - new DateTime(1970, 1, 1)).TotalMilliseconds;
         }
 
         public void OnVolumeChanged(float volume, bool isMuted)
         {
-
         }
 
         public void OnDisplayNameChanged(string displayName)
         {
-
         }
 
         public void OnIconPathChanged(string iconPath)
@@ -272,327 +346,365 @@ namespace PhysicalVolumeMixer
 
         private void button_Click(object sender, EventArgs e)
         {
-            switch ((sender as Button).Name)
+            switch ((sender as Button)?.Name)
             {
                 case "button1":
-                    try
-                    {
-                        textBox1.Enabled = true;
-                        textBox1.Text = "";
-                        comboBox1.SelectedItem = null;
-                        comboBox1.Enabled = true;
-                    }
-                    catch (Exception)
-                    {
+                    textBox1.Enabled = true;
+                    textBox1.Text = "";
+                    comboBox1.SelectedItem = null;
+                    comboBox1.Enabled = true;
+                    AddExeNameToConf(1, "");
 
-                        throw;
-                    }
                     break;
 
                 case "button2":
-                    try
-                    {
-                        textBox2.Enabled = true;
-                        textBox2.Text = "";
-                        comboBox2.SelectedItem = null;
-                        comboBox2.Enabled = true;
-                    }
-                    catch (Exception)
-                    {
+                    textBox2.Enabled = true;
+                    textBox2.Text = "";
+                    comboBox2.SelectedItem = null;
+                    comboBox2.Enabled = true;
+                    AddExeNameToConf(2, "");
 
-                        throw;
-                    }
                     break;
 
                 case "button3":
-                    try
-                    {
-                        textBox3.Enabled = true;
-                        textBox3.Text = "";
-                        comboBox3.SelectedItem = null;
-                        comboBox3.Enabled = true;
-                    }
-                    catch (Exception)
-                    {
+                    textBox3.Enabled = true;
+                    textBox3.Text = "";
+                    comboBox3.SelectedItem = null;
+                    comboBox3.Enabled = true;
+                    AddExeNameToConf(3, "");
 
-                        throw;
-                    }
                     break;
 
                 case "button4":
-                    try
-                    {
-                        textBox4.Enabled = true;
-                        textBox4.Text = "";
-                        comboBox4.SelectedItem = null;
-                        comboBox4.Enabled = true;
-                    }
-                    catch (Exception)
-                    {
-
-                        throw;
-                    }
+                    textBox4.Enabled = true;
+                    textBox4.Text = "";
+                    comboBox4.SelectedItem = null;
+                    comboBox4.Enabled = true;
+                    AddExeNameToConf(4, "");
 
                     break;
                 case "button5":
-                    try
-                    {
-                        textBox5.Enabled = true;
-                        textBox5.Text = "";
-                        comboBox5.SelectedItem = null;
-                        comboBox5.Enabled = true;
-                    }
-                    catch (Exception)
-                    {
+                    textBox5.Enabled = true;
+                    textBox5.Text = "";
+                    comboBox5.SelectedItem = null;
+                    comboBox5.Enabled = true;
+                    AddExeNameToConf(5, "");
 
-                        throw;
-                    }
-                    break;
-                default:
                     break;
             }
         }
 
         private void textBox_TextChanged(object sender, EventArgs e)
         {
-            switch ((sender as TextBox).Name)
+            switch ((sender as TextBox)?.Name)
             {
                 case "textBox1":
-                    try
+                    if (textBox1.Text != "")
                     {
-                        if (textBox1.Text != "")
+                        comboBox1.SelectedItem = null;
+                        comboBox1.Enabled = false;
+                        if (textBox1.Text.EndsWith(".exe"))
                         {
-                            comboBox1.SelectedItem = null;
-                            comboBox1.Enabled = false;
-                        }
-                        else
-                        {
-                            comboBox1.Enabled = true;
+                            AddExeNameToConf(1, textBox1.Text);
                         }
                     }
-                    catch (Exception)
+                    else
                     {
+                        comboBox1.Enabled = true;
+                    }
 
-                        throw;
-                    }
                     break;
 
                 case "textBox2":
-                    try
+                    if (textBox2.Text != "")
                     {
-                        if (textBox2.Text != "")
+                        comboBox2.SelectedItem = null;
+                        comboBox2.Enabled = false;
+                        if (textBox2.Text.EndsWith(".exe"))
                         {
-                            comboBox2.SelectedItem = null;
-                            comboBox2.Enabled = false;
-                        }
-                        else
-                        {
-                            comboBox2.Enabled = true;
+                            AddExeNameToConf(2, textBox2.Text);
                         }
                     }
-                    catch (Exception)
+                    else
                     {
+                        comboBox2.Enabled = true;
+                    }
 
-                        throw;
-                    }
                     break;
 
                 case "textBox3":
-                    try
+                    if (textBox3.Text != "")
                     {
-                        if (textBox3.Text != "")
+                        comboBox3.SelectedItem = null;
+                        comboBox3.Enabled = false;
+                        if (textBox3.Text.EndsWith(".exe"))
                         {
-                            comboBox3.SelectedItem = null;
-                            comboBox3.Enabled = false;
-                        }
-                        else
-                        {
-                            comboBox3.Enabled = true;
+                            AddExeNameToConf(3, textBox3.Text);
                         }
                     }
-                    catch (Exception)
+                    else
                     {
+                        comboBox3.Enabled = true;
+                    }
 
-                        throw;
-                    }
                     break;
 
                 case "textBox4":
-                    try
+                    if (textBox4.Text != "")
                     {
-                        if (textBox4.Text != "")
+                        comboBox4.SelectedItem = null;
+                        comboBox4.Enabled = false;
+                        if (textBox4.Text.EndsWith(".exe"))
                         {
-                            comboBox4.SelectedItem = null;
-                            comboBox4.Enabled = false;
-                        }
-                        else
-                        {
-                            comboBox4.Enabled = true;
+                            AddExeNameToConf(4, textBox4.Text);
                         }
                     }
-                    catch (Exception)
+                    else
                     {
-
-                        throw;
+                        comboBox4.Enabled = true;
                     }
 
                     break;
                 case "textBox5":
-                    try
+                    if (textBox5.Text != "")
                     {
-                        if (textBox5.Text != "")
+                        comboBox5.SelectedItem = null;
+                        comboBox5.Enabled = false;
+                        if (textBox5.Text.EndsWith(".exe"))
                         {
-                            comboBox5.SelectedItem = null;
-                            comboBox5.Enabled = false;
-                        }
-                        else
-                        {
-                            comboBox5.Enabled = true;
+                            AddExeNameToConf(5, textBox5.Text);
                         }
                     }
-                    catch (Exception)
+                    else
                     {
+                        comboBox5.Enabled = true;
+                    }
 
-                        throw;
-                    }
-                    break;
-                default:
                     break;
             }
         }
 
         private void comboBox_SelectedValueChanged(object sender, EventArgs e)
         {
-            var selected = (AppAudio)(sender as ComboBox).SelectedItem;
+            var selected = (AppAudio) (sender as ComboBox)?.SelectedItem;
             if (selected is not null)
             {
                 AudioSessionControl selectedAudioSession = GetAudioSession(selected.Process.ProcessName);
                 switch ((sender as ComboBox).Name)
                 {
                     case "comboBox1":
-                        try
+                        if (comboBox1.Text == "Foreground window")
                         {
-                            if (selectedAudioSession is not null)
+                            AddExeNameToConf(1, "Foreground");
+                        }
+                        if (selectedAudioSession is not null)
+                        {
+                            if (!selectedAudioSession.IsSystemSoundsSession)
                             {
                                 if (!selectedAudioSession.IsSystemSoundsSession)
                                 {
-                                    pictureBox1.Image = Icon.ExtractAssociatedIcon(selected.Process.MainModule.FileName).ToBitmap();
+                                    if (selected.Process.MainModule != null)
+                                        if (selected.Process.MainModule.FileName != null)
+                                        {
+                                            pictureBox1.Image = Icon
+                                                .ExtractAssociatedIcon(selected.Process.MainModule.FileName)
+                                                ?.ToBitmap();
+                                            AddExeNameToConf(1, selected.Process.MainModule.ModuleName);
+                                        }
+                                }
+                                else
+                                {
+                                    AddExeNameToConf(1, "System Sound");
                                 }
                             }
-                            if (comboBox1.SelectedItem is "" || comboBox1.SelectedItem is null)
-                            {
-                                textBox1.Enabled = true;
-                            }
-                            else
-                            {
-                                textBox1.Enabled = false;
-                            }
                         }
-                        catch (Exception)
-                        {
 
-                            throw;
+                        if (comboBox1.SelectedItem is "" || comboBox1.SelectedItem is null)
+                        {
+                            textBox1.Enabled = true;
                         }
+                        else
+                        {
+                            textBox1.Enabled = false;
+                        }
+
                         break;
 
                     case "comboBox2":
-                        try
+                        if (comboBox2.Text == "Foreground window")
                         {
-                            if (selectedAudioSession is not null)
+                            AddExeNameToConf(2, "Foreground");
+                        }
+                        if (selectedAudioSession is not null)
+                        {
+                            if (!selectedAudioSession.IsSystemSoundsSession)
                             {
-                                if (!selectedAudioSession.IsSystemSoundsSession)
-                                    pictureBox2.Image = Icon.ExtractAssociatedIcon(selected.Process.MainModule.FileName).ToBitmap();
-                            }
-                            if (comboBox2.SelectedItem is "" || comboBox2.SelectedItem is null)
-                            {
-                                textBox2.Enabled = true;
+                                if (selected.Process.MainModule != null)
+                                    if (selected.Process.MainModule.FileName != null)
+                                    {
+                                        pictureBox2.Image = Icon
+                                            .ExtractAssociatedIcon(selected.Process.MainModule.FileName)
+                                            ?.ToBitmap();
+                                        AddExeNameToConf(2, selected.Process.MainModule.ModuleName);
+                                    }
                             }
                             else
                             {
-                                textBox2.Enabled = false;
+                                AddExeNameToConf(2, "System Sound");
                             }
                         }
-                        catch (Exception)
-                        {
 
-                            throw;
+                        if (comboBox2.SelectedItem is "" || comboBox2.SelectedItem is null)
+                        {
+                            textBox2.Enabled = true;
                         }
+                        else
+                        {
+                            textBox2.Enabled = false;
+                        }
+
                         break;
 
                     case "comboBox3":
-                        try
+                        if (comboBox3.Text == "Foreground window")
                         {
-                            if (selectedAudioSession is not null)
+                            AddExeNameToConf(3, "Foreground");
+                        }
+                        if (selectedAudioSession is not null)
+                        {
+                            if (!selectedAudioSession.IsSystemSoundsSession)
                             {
-                                if (!selectedAudioSession.IsSystemSoundsSession)
-                                    pictureBox3.Image = Icon.ExtractAssociatedIcon(selected.Process.MainModule.FileName).ToBitmap();
-                            }
-                            if (comboBox3.SelectedItem is "" || comboBox3.SelectedItem is null)
-                            {
-                                textBox3.Enabled = true;
+                                if (selected.Process.MainModule != null)
+                                    if (selected.Process.MainModule.FileName != null)
+                                    {
+                                        pictureBox3.Image = Icon
+                                            .ExtractAssociatedIcon(selected.Process.MainModule.FileName)
+                                            ?.ToBitmap();
+                                        AddExeNameToConf(3, selected.Process.MainModule.ModuleName);
+                                    }
                             }
                             else
                             {
-                                textBox3.Enabled = false;
+                                AddExeNameToConf(3, "System Sound");
                             }
                         }
-                        catch (Exception)
-                        {
 
-                            throw;
+                        if (comboBox3.SelectedItem is "" || comboBox3.SelectedItem is null)
+                        {
+                            textBox3.Enabled = true;
                         }
+                        else
+                        {
+                            textBox3.Enabled = false;
+                        }
+
                         break;
 
                     case "comboBox4":
-                        try
+                        if (comboBox4.Text == "Foreground window")
                         {
-                            if (selectedAudioSession is not null)
+                            AddExeNameToConf(4, "Foreground");
+                        }
+                        if (selectedAudioSession is not null)
+                        {
+                            if (!selectedAudioSession.IsSystemSoundsSession)
                             {
-                                if (!selectedAudioSession.IsSystemSoundsSession)
-                                    pictureBox4.Image = Icon.ExtractAssociatedIcon(selected.Process.MainModule.FileName).ToBitmap();
-                            }
-                            if (comboBox4.SelectedItem is "" || comboBox4.SelectedItem is null)
-                            {
-                                textBox4.Enabled = true;
+                                if (selected.Process.MainModule != null)
+                                    if (selected.Process.MainModule.FileName != null)
+                                    {
+                                        pictureBox4.Image = Icon
+                                            .ExtractAssociatedIcon(selected.Process.MainModule.FileName)
+                                            ?.ToBitmap();
+                                        AddExeNameToConf(4, selected.Process.MainModule.ModuleName);
+                                    }
                             }
                             else
                             {
-                                textBox4.Enabled = false;
+                                AddExeNameToConf(4, "System Sound");
                             }
                         }
-                        catch (Exception)
-                        {
 
-                            throw;
+                        if (comboBox4.SelectedItem is "" || comboBox4.SelectedItem is null)
+                        {
+                            textBox4.Enabled = true;
+                        }
+                        else
+                        {
+                            textBox4.Enabled = false;
                         }
 
                         break;
                     case "comboBox5":
-                        try
+                        if (comboBox5.Text == "Foreground window")
                         {
-                            if (selectedAudioSession is not null)
+                            AddExeNameToConf(5, "Foreground");
+                        }
+                        if (selectedAudioSession is not null)
+                        {
+                            if (!selectedAudioSession.IsSystemSoundsSession)
                             {
-                                if (!selectedAudioSession.IsSystemSoundsSession)
-                                    pictureBox5.Image = Icon.ExtractAssociatedIcon(selected.Process.MainModule.FileName).ToBitmap();
-                            }
-                            if (comboBox5.SelectedItem is "" || comboBox5.SelectedItem is null)
-                            {
-                                textBox5.Enabled = true;
+                                if (selected.Process.MainModule != null)
+                                    if (selected.Process.MainModule.FileName != null)
+                                    {
+                                        pictureBox5.Image = Icon
+                                            .ExtractAssociatedIcon(selected.Process.MainModule.FileName)
+                                            ?.ToBitmap();
+                                        AddExeNameToConf(5, selected.Process.MainModule.ModuleName);
+                                    }
                             }
                             else
                             {
-                                textBox5.Enabled = false;
+                                AddExeNameToConf(5, "System Sound");
                             }
                         }
-                        catch (Exception)
-                        {
 
-                            throw;
+                        if (comboBox5.SelectedItem is "" || comboBox5.SelectedItem is null)
+                        {
+                            textBox5.Enabled = true;
                         }
-                        break;
-                    default:
+                        else
+                        {
+                            textBox5.Enabled = false;
+                        }
+
                         break;
                 }
+            }
+        }
+
+        private void AddExeNameToConf(int port, string exename)
+        {
+            TomlTable table;
+            using (StreamReader reader = File.OpenText("configuration.toml"))
+            {
+                // Parse the table
+                table = TOML.Parse(reader);
+                table["slidersExe"][port-1] = exename;
+            }
+            using(StreamWriter writer = File.CreateText("configuration.toml"))
+            {
+                table.WriteTo(writer);
+                // Remember to flush the data if needed!
+                writer.Flush();
+            }
+        }
+
+        private void showToolStripMenuItem_Click(object sender, EventArgs e)
+        {
+            notifyIcon1.Visible = false;
+            Show();
+        }
+
+        private void exitToolStripMenuItem_Click(object sender, EventArgs e)
+        {
+            Application.Exit();
+        }
+
+        private void notifyIcon1_MouseUp(object sender, MouseEventArgs e)
+        {
+            if (e.Button == MouseButtons.Left) {
+                MethodInfo mi = typeof(NotifyIcon).GetMethod("ShowContextMenu", BindingFlags.Instance | BindingFlags.NonPublic);
+                mi.Invoke(notifyIcon1, null);
             }
         }
     }
